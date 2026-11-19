@@ -1,0 +1,120 @@
+{
+  "name": "fig19_case1",
+  "description": "Paper Fig. 19, column 2 (caseID 1 of the original src/tests/shapeOpt/shapeOpt.cpp): 60x40x6 voxels, the x- face is fixed, a downward load acts on the grid line x = 50, y = 10; V_vol = 0.2.",
+  "paper_reference": {
+    "figure": "Fig. 19",
+    "column": 2,
+    "energy_msd": 1.73,
+    "energy_ma": 1.9
+  },
+  "grid": {
+    "resolution": [
+      60,
+      40,
+      6
+    ]
+  },
+  "skeleton": {
+    "coordinates": "voxel",
+    "vertices": [
+      [
+        0,
+        10,
+        2
+      ],
+      [
+        30,
+        10,
+        2
+      ],
+      [
+        50,
+        10,
+        2
+      ],
+      [
+        0,
+        30,
+        2
+      ],
+      [
+        50,
+        30,
+        2
+      ],
+      [
+        15,
+        20,
+        2
+      ]
+    ],
+    "edges": [
+      [
+        0,
+        1
+      ],
+      [
+        1,
+        2
+      ],
+      [
+        3,
+        4
+      ],
+      [
+        2,
+        4
+      ],
+      [
+        1,
+        4
+      ],
+      [
+        1,
+        5
+      ],
+      [
+        3,
+        5
+      ],
+      [
+        0,
+        3
+      ]
+    ]
+  },
+  "boundary_conditions": {
+    "fixed": [
+      {
+        "type": "face",
+        "face": "x-"
+      }
+    ],
+    "loads": [
+      {
+        "type": "box",
+        "min": [
+          50,
+          10,
+          0
+        ],
+        "max": [
+          50,
+          10,
+          6
+        ],
+        "force": [
+          0,
+          -10,
+          0
+        ]
+      }
+    ]
+  },
+  "optimization": {
+    "volume_fraction": 0.2,
+    "method": "msd",
+    "max_iterations": 200,
+    "initial_radius": 4
+  }
+}

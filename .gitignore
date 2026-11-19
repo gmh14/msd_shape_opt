@@ -1,0 +1,10 @@
+build/
+runs/
+__pycache__/
+*.pyc
+validation/*/case*/iter*-sample.obj
+# per-iteration skeletons, initial voxels and template copies of the Fig. 19 reproduction (the scripts use energy.txt, log.txt, final-sample.obj)
+validation/*/case*/iter*-sk.obj
+validation/*/case*/initial-sample.obj
+validation/*/case*/s.obj
+validation/*/case*/c1.obj

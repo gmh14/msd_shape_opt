@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MSD Shape Optimization</title>
+<meta name="description" content="Topology-constrained shape optimization with the Medial Skeletal Diagram: set up a skeletal graph, run the optimizer, and inspect the optimized shape, its compliance and the convergence.">
+<script>
+  // Behind a path-prefix proxy the page must be addressed with a trailing slash; otherwise every relative URL
+  // (api/..., js/..., vendor/...) would resolve one directory too high. Also apply the stored theme before the
+  // first paint so that a dark-theme user does not see a light flash.
+  (function () {
+    var p = location.pathname;
+    if (p.charAt(p.length - 1) !== '/' && !/\.html?$/.test(p)) {
+      window.msdRedirecting = true;
+      location.replace(p + '/' + location.search + location.hash);
+    }
+    try {
+      var t = localStorage.getItem('msd.theme');
+      if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+    } catch (e) { /* storage unavailable: follow the OS setting */ }
+  })();
+</script>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three-0.170.0/three.module.min.js",
+    "three/addons/": "./vendor/three-0.170.0/"
+  }
+}
+</script>
+<script>
+  // The stylesheet and the app are written by this script instead of plain tags: on a URL without the trailing
+  // slash (redirected above) the browser would otherwise prefetch them one directory too high, i.e. outside a
+  // proxy's path prefix (two 404s). Written during parsing, they load exactly like the tags they replace.
+  if (!window.msdRedirecting) {
+    document.write('<link rel="stylesheet" href="css/app.css"><script type="module" src="js/main.js"><\/script>');
+  }
+</script>
+</head>
+<body>
+
+<!-- icon sprite (stroke icons drawn on a 24 x 24 grid) -->
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l10.5-6.5z" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><rect x="6.5" y="5.5" width="3.8" height="13" rx="1" fill="currentColor" stroke="none"/><rect x="13.7" y="5.5" width="3.8" height="13" rx="1" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-prev" viewBox="0 0 24 24"><path d="M16.5 6v12L8 12z" fill="currentColor" stroke="none"/><path d="M7 6v12"/></symbol>
+  <symbol id="i-next" viewBox="0 0 24 24"><path d="M7.5 6v12L16 12z" fill="currentColor" stroke="none"/><path d="M17 6v12"/></symbol>
+  <symbol id="i-first" viewBox="0 0 24 24"><path d="M5.5 6v12"/><path d="M12.5 6.5v11L6.5 12z" fill="currentColor" stroke="none"/><path d="M19 6.5v11L13 12z" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-last" viewBox="0 0 24 24"><path d="M18.5 6v12"/><path d="M11.5 6.5v11l6-5.5z" fill="currentColor" stroke="none"/><path d="M5 6.5v11l6-5.5z" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 15V4.5"/><path d="M7.5 8.5 12 4l4.5 4.5"/><path d="M4.5 14.5v4a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5v-4"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v10.5"/><path d="M7.5 10.5 12 15l4.5-4.5"/><path d="M4.5 14.5v4a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5v-4"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4.5 7h15"/><path d="M9.5 7V5a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v2"/><path d="M6.5 7l.8 11.6A1.5 1.5 0 0 0 8.8 20h6.4a1.5 1.5 0 0 0 1.5-1.4L17.5 7"/><path d="M10 11v5.5M14 11v5.5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="2"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M19 12a7 7 0 1 1-2.05-4.95"/><path d="M19 4.5V9h-4.5"/></symbol>
+  <symbol id="i-theme" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7.5"/><path d="M12 4.5a7.5 7.5 0 0 1 0 15z" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.8"/><path d="M12 3v2.2M12 18.8V21M3 12h2.2M18.8 12H21M5.6 5.6l1.6 1.6M16.8 16.8l1.6 1.6M5.6 18.4l1.6-1.6M16.8 7.2l1.6-1.6"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M19.5 14.5A7.5 7.5 0 0 1 9.5 4.5a7.5 7.5 0 1 0 10 10z"/></symbol>
+  <symbol id="i-camera" viewBox="0 0 24 24"><path d="M4 8.5A1.5 1.5 0 0 1 5.5 7h2.2l1.5-2h5.6l1.5 2h2.2A1.5 1.5 0 0 1 20 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5z"/><circle cx="12" cy="12.8" r="3.3"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.8 12S6.2 5.8 12 5.8 21.2 12 21.2 12 17.8 18.2 12 18.2 2.8 12 2.8 12z"/><circle cx="12" cy="12" r="2.8"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.2 4.2L19 7"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4 21 19.5H3z"/><path d="M12 10v4.2"/><path d="M12 17h.01"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5"/><path d="M12 7.8h.01"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
+  <symbol id="i-slash" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M6 18 18 6"/></symbol>
+  <symbol id="i-edit" viewBox="0 0 24 24"><path d="M14.5 5.5l4 4L9 19H5v-4z"/><path d="M12.5 7.5l4 4"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M6.5 3.5h7l4 4v12a1 1 0 0 1-1 1h-10a1 1 0 0 1-1-1v-15a1 1 0 0 1 1-1z"/><path d="M13.5 3.5v4h4"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+</svg>
+
+<noscript><p style="padding: 16px">This page needs JavaScript (ES modules and WebGL) to show the optimization runs.</p></noscript>
+
+<div class="app" id="app">
+
+  <!-- ============================== sidebar: new run + runs ============================== -->
+  <aside class="sidebar" aria-label="New run and run list">
+    <header class="brand">
+      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+        <g class="brand-edges"><line x1="6" y1="24" x2="16" y2="9"/><line x1="16" y1="9" x2="26" y2="21"/><line x1="6" y1="24" x2="26" y2="21"/><line x1="16" y1="9" x2="15" y2="22.5"/></g>
+        <g class="brand-nodes"><circle cx="6" cy="24" r="2.8"/><circle cx="16" cy="9" r="2.8"/><circle cx="26" cy="21" r="2.8"/></g>
+      </svg>
+      <div class="brand-text">
+        <h1>MSD shape optimization</h1>
+        <p>Topology-constrained compliance minimization with the Medial Skeletal Diagram</p>
+      </div>
+      <button class="icon-btn" id="theme-toggle" type="button" aria-label="Color theme: automatic" title="Color theme: automatic">
+        <svg class="icon"><use href="#i-theme"></use></svg>
+      </button>
+    </header>
+
+    <div class="banner banner-critical" id="server-banner" role="alert" hidden></div>
+
+    <!-- the run list comes first and scrolls on its own, so that it is on the first screen next to an open New run -->
+    <section class="section section-runs" id="runs-section" aria-labelledby="runs-heading">
+      <div class="section-head static">
+        <h2 id="runs-heading">Runs <span class="count" id="runs-count"></span></h2>
+        <button class="icon-btn" type="button" id="runs-refresh" aria-label="Refresh the run list" title="Refresh">
+          <svg class="icon"><use href="#i-refresh"></use></svg>
+        </button>
+      </div>
+      <ul class="run-list" id="run-list" aria-labelledby="runs-heading"></ul>
+      <p class="empty-small" id="runs-empty" hidden>No runs yet. Pick an example in New run below and press Run.</p>
+      <footer class="server-info" id="server-info" aria-live="polite"></footer>
+    </section>
+
+    <details class="section" id="newrun-section" open>
+      <summary class="section-head">
+        <svg class="icon chevron" aria-hidden="true"><use href="#i-chevron"></use></svg>
+        <h2>New run</h2>
+        <span class="section-hint">example, upload or edit a skeleton</span>
+      </summary>
+      <div class="section-body" id="newrun">
+        <label class="field">
+          <span class="field-label">Example</span>
+          <select id="nr-example" aria-describedby="nr-example-desc">
+            <option value="">Loading examples…</option>
+          </select>
+        </label>
+        <p class="example-desc" id="nr-example-desc"></p>
+
+        <div class="quick" aria-label="Quick settings (kept in sync with the JSON)">
+          <div class="field field-wide">
+            <span class="field-label" id="nr-method-label">Method</span>
+            <div class="segmented" role="radiogroup" aria-labelledby="nr-method-label">
+              <label title="Medial Skeletal Diagram: generalized enveloping primitives (the paper's method)"><input type="radio" name="nr-method" value="msd"><span>MSD <small>enveloping primitives</small></span></label>
+              <label title="Medial-axis baseline: one radius per sphere, cones on the edges"><input type="radio" name="nr-method" value="ma"><span>MA <small>medial-axis baseline</small></span></label>
+            </div>
+          </div>
+          <label class="field">
+            <span class="field-label">Volume fraction</span>
+            <input id="nr-vf" type="number" min="0.01" max="1" step="0.01" inputmode="decimal" placeholder="0.2">
+          </label>
+          <label class="field">
+            <span class="field-label">Max iterations</span>
+            <input id="nr-iters" type="number" min="1" max="100000" step="1" inputmode="numeric" placeholder="200">
+          </label>
+          <label class="field">
+            <span class="field-label">Initial radius <small>voxels</small></span>
+            <input id="nr-radius" type="number" min="0.5" max="100" step="0.5" inputmode="decimal" placeholder="4">
+          </label>
+          <label class="field">
+            <span class="field-label">Threads <small id="nr-threads-hint">0 = all cores</small></span>
+            <input id="nr-threads" type="number" min="0" step="1" inputmode="numeric" value="0">
+          </label>
+        </div>
+
+        <details class="editor" id="nr-editor" open>
+          <summary>
+            <svg class="icon chevron" aria-hidden="true"><use href="#i-chevron"></use></svg>
+            Configuration JSON <span class="muted" id="nr-json-summary"></span>
+          </summary>
+          <div class="editor-tools">
+            <label class="btn btn-sm btn-ghost file-btn" title="Load a configuration from a .json file">
+              <input type="file" id="nr-upload" accept=".json,application/json">
+              <svg class="icon" aria-hidden="true"><use href="#i-upload"></use></svg>Upload JSON
+            </label>
+            <button class="btn btn-sm btn-ghost" type="button" id="nr-download" title="Save the editor content as a .json file">
+              <svg class="icon" aria-hidden="true"><use href="#i-download"></use></svg>Download JSON
+            </button>
+            <button class="btn btn-sm btn-ghost" type="button" id="nr-format" title="Re-indent the JSON">Format</button>
+          </div>
+          <textarea id="nr-json" class="code" spellcheck="false" autocomplete="off" autocapitalize="off" wrap="off" rows="16" aria-label="Configuration JSON" aria-describedby="nr-json-status"></textarea>
+          <div class="editor-status" id="nr-json-status" aria-live="polite"></div>
+        </details>
+
+        <div class="actions">
+          <button class="btn" type="button" id="nr-validate">
+            <svg class="icon" aria-hidden="true"><use href="#i-eye"></use></svg>Validate / Preview
+          </button>
+          <button class="btn btn-primary" type="button" id="nr-run">
+            <svg class="icon" aria-hidden="true"><use href="#i-play"></use></svg>Run
+          </button>
+        </div>
+        <div class="result" id="nr-result" aria-live="polite" hidden></div>
+      </div>
+    </details>
+  </aside>
+
+  <!-- ============================== main area ============================== -->
+  <main class="main" id="main">
+
+    <section class="empty-state" id="empty-state">
+      <svg class="empty-art" viewBox="0 0 220 120" aria-hidden="true">
+        <rect class="ea-box" x="10" y="10" width="200" height="100" rx="2"/>
+        <g class="ea-edges"><line x1="10" y1="40" x2="110" y2="40"/><line x1="110" y1="40" x2="175" y2="40"/><line x1="10" y1="90" x2="175" y2="90"/><line x1="175" y1="40" x2="175" y2="90"/><line x1="110" y1="40" x2="175" y2="90"/><line x1="110" y1="40" x2="60" y2="65"/><line x1="10" y1="90" x2="60" y2="65"/><line x1="10" y1="40" x2="60" y2="65"/></g>
+        <g class="ea-nodes"><circle cx="10" cy="40" r="4.5"/><circle cx="110" cy="40" r="4.5"/><circle cx="175" cy="40" r="4.5"/><circle cx="10" cy="90" r="4.5"/><circle cx="175" cy="90" r="4.5"/><circle cx="60" cy="65" r="4.5"/></g>
+        <path class="ea-load" d="M175 4v24m-5-7 5 7 5-7"/>
+      </svg>
+      <h2>Select or start a run</h2>
+      <p><span id="empty-has-runs">Open a run from the <strong>Runs</strong> list to inspect its optimized shape, compliance and convergence, or set up a new problem in <strong>New run</strong>:</span><span id="empty-no-runs" hidden>There are no runs on this server yet. Set up a problem in <strong>New run</strong>:</span></p>
+      <ol>
+        <li><strong>Pick an example</strong> or upload a skeletal graph as JSON, and adjust the method, the target volume fraction and the iteration budget.</li>
+        <li><strong>Validate / Preview</strong> to check the configuration and see the domain, the skeleton and the boundary conditions in 3D.</li>
+        <li><strong>Run</strong> and watch the optimization live; replay it once it has finished.</li>
+      </ol>
+    </section>
+
+    <section class="workspace" id="workspace" hidden>
+      <header class="ws-header">
+        <div class="ws-heading">
+          <p class="eyebrow" id="ws-eyebrow">Run</p>
+          <div class="ws-title-row">
+            <h2 id="ws-title"></h2>
+            <span class="chip" id="ws-chip"></span>
+            <span class="live" id="ws-live" hidden></span>
+          </div>
+          <p class="ws-sub" id="ws-sub"></p>
+        </div>
+        <div class="ws-actions">
+          <button class="btn btn-primary" type="button" id="ws-run" hidden>
+            <svg class="icon" aria-hidden="true"><use href="#i-play"></use></svg>Run
+          </button>
+          <button class="btn" type="button" id="ws-cancel" hidden>
+            <svg class="icon" aria-hidden="true"><use href="#i-stop"></use></svg>Cancel run
+          </button>
+          <button class="btn" type="button" id="ws-edit" hidden title="Copy this run's configuration into the New run editor">
+            <svg class="icon" aria-hidden="true"><use href="#i-edit"></use></svg>Edit as new run
+          </button>
+          <button class="btn btn-danger" type="button" id="ws-delete" hidden>
+            <svg class="icon" aria-hidden="true"><use href="#i-trash"></use></svg>Delete
+          </button>
+          <button class="btn btn-ghost" type="button" id="ws-close" hidden>Close preview</button>
+        </div>
+      </header>
+
+      <div class="ws-alerts" id="ws-alerts"></div>
+
+      <div class="ws-grid">
+        <div class="ws-col-main">
+          <section class="card viewer-card" aria-label="3D view">
+            <div class="viewer-toolbar" role="group" aria-label="Layers">
+              <label class="toggle" title="Voxels with density above the threshold"><input type="checkbox" data-layer="voxels" checked><span>Voxels</span></label>
+              <label class="toggle" title="Generalized enveloping primitives (semi-transparent)"><input type="checkbox" data-layer="primitives"><span>Primitives</span></label>
+              <label class="toggle toggle-sub" title="Clip the primitives to the design domain box"><input type="checkbox" id="vt-clip" checked><span>Clip</span></label>
+              <label class="toggle" title="Skeleton vertices and edges (hidden parts drawn faintly)"><input type="checkbox" data-layer="skeleton" checked><span>Skeleton</span></label>
+              <label class="toggle" title="Initial skeleton (ghost)"><input type="checkbox" data-layer="initial"><span>Initial skeleton</span></label>
+              <label class="toggle" title="Fixed grid vertices and loads"><input type="checkbox" data-layer="bcs" checked><span>Boundary conditions</span></label>
+              <label class="toggle" title="Bounding box of the design domain"><input type="checkbox" data-layer="box" checked><span>Domain</span></label>
+            </div>
+            <div class="viewer" id="viewer">
+              <div class="viewer-caption" id="viewer-caption"></div>
+              <div class="viewer-notice" id="viewer-notice" hidden></div>
+              <ul class="viewer-legend" id="viewer-legend" aria-label="Legend">
+                <li><span class="lg lg-vertex"></span>Skeleton vertex</li>
+                <li><span class="lg lg-edge"></span>Skeleton edge</li>
+                <li><span class="lg lg-fixed"></span>Fixed vertex</li>
+                <li><span class="lg lg-load"></span>Load</li>
+              </ul>
+              <svg class="gizmo" id="viewer-gizmo" viewBox="-32 -32 64 64" aria-hidden="true"></svg>
+            </div>
+            <div class="viewer-footer">
+              <label class="thr" title="Voxels whose density θ is above this value are drawn. At 0.50 the caption gives the optimizer's own count of θ > 0.5 (Filled voxels). The drawing uses θ stored with 8 bits per voxel, so it can miss the few voxels whose θ lies within 0.002 above 0.5.">
+                <span>Density θ &gt;</span>
+                <input type="range" id="thr-range" min="0.05" max="0.95" step="0.01" value="0.5" aria-label="Density threshold">
+                <output id="thr-value" for="thr-range">0.50</output>
+              </label>
+              <div class="views" role="group" aria-label="Camera presets">
+                <button class="btn btn-xs" type="button" data-view="front">Front</button>
+                <button class="btn btn-xs" type="button" data-view="side">Side</button>
+                <button class="btn btn-xs" type="button" data-view="top">Top</button>
+                <button class="btn btn-xs" type="button" data-view="iso">Iso</button>
+                <button class="btn btn-xs" type="button" data-view="default" title="Automatic view for this domain">Auto</button>
+                <button class="btn btn-xs" type="button" id="viewer-shot" title="Save the 3D view as a PNG image" aria-label="Save the 3D view as PNG">
+                  <svg class="icon" aria-hidden="true"><use href="#i-camera"></use></svg>PNG
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <section class="card playback" id="playback" aria-label="Playback">
+            <div class="pb-buttons">
+              <button class="icon-btn" type="button" id="pb-first" aria-label="First iteration" title="First iteration"><svg class="icon"><use href="#i-first"></use></svg></button>
+              <button class="icon-btn" type="button" id="pb-prev" aria-label="Previous iteration" title="Previous iteration (Left arrow)"><svg class="icon"><use href="#i-prev"></use></svg></button>
+              <button class="icon-btn pb-play" type="button" id="pb-play" aria-label="Play" title="Play / pause (Space)"><svg class="icon"><use href="#i-play"></use></svg></button>
+              <button class="icon-btn" type="button" id="pb-next" aria-label="Next iteration" title="Next iteration (Right arrow)"><svg class="icon"><use href="#i-next"></use></svg></button>
+              <button class="icon-btn" type="button" id="pb-last" aria-label="Last iteration" title="Last iteration"><svg class="icon"><use href="#i-last"></use></svg></button>
+            </div>
+            <input type="range" class="pb-range" id="pb-range" min="0" max="0" step="1" value="0" aria-label="Displayed iteration">
+            <output class="pb-label" id="pb-label" for="pb-range">–</output>
+            <label class="pb-speed">
+              <span>Speed</span>
+              <select id="pb-speed" aria-label="Playback speed">
+                <option value="2">0.5×</option>
+                <option value="4" selected>1×</option>
+                <option value="8">2×</option>
+                <option value="16">4×</option>
+              </select>
+            </label>
+            <label class="toggle pb-follow" title="Show the newest iteration while the run is going">
+              <input type="checkbox" id="pb-follow"><span>Follow live</span>
+            </label>
+          </section>
+        </div>
+
+        <div class="ws-col-side">
+          <section class="card metrics" id="metrics" aria-label="Metrics">
+            <div class="hero">
+              <div class="hero-label">
+                <span class="key" style="--key: var(--series-1)" aria-hidden="true"></span>
+                <span>Compliance</span>
+                <span class="formula">E = ½ uᵀKu</span>
+              </div>
+              <div class="hero-value" id="m-compliance">–</div>
+              <div class="hero-sub" id="m-compliance-sub"></div>
+              <div class="paper" id="m-paper" hidden></div>
+            </div>
+            <div class="meter-block" id="m-volume-block">
+              <div class="meter-head">
+                <span class="meter-label"><span class="key" style="--key: var(--series-3)" aria-hidden="true"></span>Volume fraction</span>
+                <span class="meter-value"><strong id="m-volume">–</strong> <span class="muted">target <span id="m-volume-target">–</span></span></span>
+              </div>
+              <div class="meter" id="m-volume-meter" role="img" aria-label="Volume fraction">
+                <div class="meter-fill" id="m-volume-fill"></div>
+                <div class="meter-target" id="m-volume-tick"></div>
+              </div>
+            </div>
+            <dl class="stats">
+              <div class="stat"><dt><span class="key" style="--key: var(--series-2)" aria-hidden="true"></span>Total energy</dt><dd id="m-energy">–</dd></div>
+              <div class="stat"><dt>Volume penalty</dt><dd id="m-penalty">–</dd></div>
+              <div class="stat"><dt>Iteration</dt><dd id="m-iter">–</dd></div>
+              <div class="stat"><dt>Elapsed</dt><dd id="m-elapsed">–</dd></div>
+              <div class="stat stat-wide"><dt><span class="key" style="--key: var(--series-4)" aria-hidden="true"></span>Max change <span class="muted">converged below 10⁻⁵</span></dt><dd><span id="m-change">–</span><span class="conv" id="m-conv"></span></dd></div>
+              <div class="stat"><dt>Filled voxels</dt><dd id="m-filled">–</dd></div>
+              <div class="stat"><dt>Radius range <span class="muted">voxels</span></dt><dd id="m-radius">–</dd></div>
+              <div class="stat"><dt>Step size</dt><dd id="m-step">–</dd></div>
+              <div class="stat"><dt>Line search</dt><dd id="m-ls">–</dd></div>
+            </dl>
+          </section>
+
+          <section class="card problem" id="problem" aria-label="Problem summary" hidden>
+            <h3>Problem</h3>
+            <dl class="kv" id="problem-kv"></dl>
+            <div id="problem-warnings"></div>
+          </section>
+
+          <section class="card charts" id="charts" aria-label="Convergence charts">
+            <div class="card-head">
+              <h3>Convergence</h3>
+              <label class="toggle toggle-sm" title="Logarithmic y axis for the energies">
+                <input type="checkbox" id="chart-log" checked><span>Log scale</span>
+              </label>
+            </div>
+            <div class="chart-stack" id="chart-stack">
+              <figure class="chart" id="chart-energy"></figure>
+              <figure class="chart" id="chart-volume"></figure>
+              <figure class="chart" id="chart-change"></figure>
+            </div>
+            <p class="chart-empty" id="chart-empty" hidden>No iterations yet.</p>
+          </section>
+        </div>
+      </div>
+
+      <div class="ws-bottom">
+        <section class="card downloads" id="downloads" aria-labelledby="downloads-heading">
+          <h3 id="downloads-heading">Downloads</h3>
+          <ul class="file-list" id="file-list"></ul>
+        </section>
+
+        <details class="card log" id="log-details">
+          <summary>
+            <svg class="icon chevron" aria-hidden="true"><use href="#i-chevron"></use></svg>
+            <h3>Optimizer log</h3><span class="muted">last 200 lines of stdout.log</span>
+          </summary>
+          <div class="log-tools">
+            <label class="toggle toggle-sm"><input type="checkbox" id="log-hide-events" checked><span>Hide @@MSD event lines</span></label>
+            <button class="btn btn-xs" type="button" id="log-refresh"><svg class="icon" aria-hidden="true"><use href="#i-refresh"></use></svg>Refresh</button>
+          </div>
+          <pre class="log-pre" id="log-pre" tabindex="0"></pre>
+        </details>
+
+        <details class="card history" id="history-details">
+          <summary>
+            <svg class="icon chevron" aria-hidden="true"><use href="#i-chevron"></use></svg>
+            <h3>Iteration table</h3><span class="muted">every record of history.jsonl; click a row to display it</span>
+          </summary>
+          <div class="table-wrap" id="history-wrap"></div>
+        </details>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<dialog class="dialog" id="confirm-dialog" aria-labelledby="confirm-title">
+  <form method="dialog">
+    <h3 id="confirm-title">Delete run?</h3>
+    <p id="confirm-text"></p>
+    <div class="dialog-actions">
+      <button class="btn" value="cancel" type="submit">Keep</button>
+      <button class="btn btn-danger-solid" value="ok" type="submit" id="confirm-ok">Delete</button>
+    </div>
+  </form>
+</dialog>
+
+</body>
+</html>

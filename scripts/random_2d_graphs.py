@@ -1,0 +1,151 @@
+"""Random planar skeleton graphs on a thin (quasi-2D, hence fast) voxel slab, written as msdShapeOpt JSON inputs.
+
+    python3 scripts/random_2d_graphs.py --count 4 --seed 2026 --out examples
+
+Each graph: 6-9 random vertices in the mid-plane z = nz/2 (at least --min-dist voxels apart), connected by a random
+spanning tree of the greedy non-crossing (shortest-first) triangulation plus some of its remaining edges, so the
+graph is connected and planar. The boundary conditions cycle through three set-ups:
+  cantilever  -- the x- face is fixed (two vertices lie on it), the right-most vertex is pulled down;
+  bridge      -- two bottom vertices near the corners are pinned, a top vertex near the middle is pushed down;
+  random load -- the x- face is fixed, a random vertex in the right half gets a load in a random downward direction.
+"""
+
+import argparse
+import json
+import math
+import random
+from pathlib import Path
+
+
+def orient(a, b, c):
+    return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+
+def segments_cross(p1, p2, p3, p4):
+    """Proper crossing of segments p1p2 and p3p4 (touching at a shared end point does not count)."""
+    d1, d2, d3, d4 = orient(p3, p4, p1), orient(p3, p4, p2), orient(p1, p2, p3), orient(p1, p2, p4)
+    return d1 * d2 < 0 and d3 * d4 < 0
+
+
+def point_segment_distance(p, a, b):
+    ab = (b[0] - a[0], b[1] - a[1])
+    t = max(0.0, min(1.0, ((p[0] - a[0]) * ab[0] + (p[1] - a[1]) * ab[1]) / (ab[0] ** 2 + ab[1] ** 2)))
+    return math.dist(p, (a[0] + t * ab[0], a[1] + t * ab[1]))
+
+
+def sample_points(rng, fixed_pts, n, nx, ny, min_dist, margin=2):
+    pts = list(fixed_pts)
+    for _ in range(10000):
+        if len(pts) >= n:
+            break
+        p = (rng.randint(margin, nx - margin), rng.randint(margin, ny - margin))
+        if all(math.dist(p, q) >= min_dist for q in pts):
+            pts.append(p)
+    return pts
+
+
+def planar_edges(rng, pts, extra_fraction, clearance=2.5):
+    n = len(pts)
+    cand = sorted(((math.dist(pts[i], pts[j]), i, j) for i in range(n) for j in range(i + 1, n)))
+    tri = []  # greedy non-crossing triangulation, edges must not pass close to other vertices
+    for _, i, j in cand:
+        if any(point_segment_distance(pts[k], pts[i], pts[j]) < clearance for k in range(n) if k not in (i, j)):
+            continue
+        if any(segments_cross(pts[i], pts[j], pts[a], pts[b]) for a, b in tri):
+            continue
+        tri.append((i, j))
+    # random spanning tree (randomized Kruskal) + a fraction of the remaining triangulation edges
+    parent = list(range(n))
+
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    order = tri[:]
+    rng.shuffle(order)
+    tree, rest = [], []
+    for i, j in order:
+        ri, rj = find(i), find(j)
+        if ri != rj:
+            parent[ri] = rj
+            tree.append((i, j))
+        else:
+            rest.append((i, j))
+    if len(tree) != n - 1:
+        return None
+    return sorted(tree + rest[: round(extra_fraction * len(rest))])
+
+
+def make_case(rng, k, kind, nx, ny, nz, min_dist, force):
+    z = nz / 2
+    for _ in range(200):
+        n = rng.randint(6, 9)
+        if kind == "bridge":
+            supports = [(2, 2), (nx - 2, 2)]
+            fixed_pts = supports + [(nx // 2 + rng.randint(-4, 4), ny - 3)]
+        else:
+            y1 = rng.randint(3, ny // 2 - 3)
+            y2 = rng.randint(ny // 2 + 3, ny - 3)
+            fixed_pts = [(0, y1), (0, y2), (nx - 3, rng.randint(4, ny - 4))]
+        pts = sample_points(rng, fixed_pts, n, nx, ny, min_dist)
+        if len(pts) < n:
+            continue
+        edges = planar_edges(rng, pts, extra_fraction=0.45)
+        if edges:
+            break
+    else:
+        raise RuntimeError("could not generate a graph")
+
+    if kind == "bridge":
+        fixed = [{"type": "vertex", "vertex": 0, "radius": 2}, {"type": "vertex", "vertex": 1, "radius": 2}]
+        load_vertex, direction, bc = 2, (0.0, -1.0), "the two bottom corner vertices are pinned, the top-middle vertex is pushed down"
+    elif kind == "cantilever":
+        fixed = [{"type": "face", "face": "x-"}]
+        load_vertex, direction, bc = 2, (0.0, -1.0), "the x- face is fixed, the right-most vertex is pulled down"
+    else:
+        fixed = [{"type": "face", "face": "x-"}]
+        right = [i for i, p in enumerate(pts) if p[0] >= nx / 2 and i >= 2]
+        load_vertex = rng.choice(right) if right else 2
+        a = math.radians(rng.uniform(-150, -30))
+        direction = (math.cos(a), math.sin(a))
+        bc = f"the x- face is fixed, vertex {load_vertex} carries a load pointing {round(math.degrees(a))} deg from +x"
+
+    return {
+        "name": f"random2d_{k}",
+        "description": f"Random planar graph {k} ({len(pts)} vertices, {len(edges)} edges) in a thin {nx}x{ny}x{nz} slab "
+                       f"(fast, quasi-2D): {bc}. Generated by scripts/random_2d_graphs.py.",
+        "grid": {"resolution": [nx, ny, nz]},
+        "skeleton": {"coordinates": "voxel", "vertices": [[p[0], p[1], z] for p in pts], "edges": [list(e) for e in edges]},
+        "boundary_conditions": {
+            "fixed": fixed,
+            "loads": [{"type": "vertex", "vertex": load_vertex, "radius": 2,
+                       "total_force": [round(force * direction[0], 3), round(force * direction[1], 3), 0]}],
+        },
+        "optimization": {"volume_fraction": 0.25, "method": "msd", "max_iterations": 120, "initial_radius": 3},
+    }
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--count", type=int, default=4)
+    ap.add_argument("--seed", type=int, default=2026)
+    ap.add_argument("--out", default="examples")
+    ap.add_argument("--resolution", type=int, nargs=3, default=(50, 30, 4), metavar=("NX", "NY", "NZ"))
+    ap.add_argument("--min-dist", type=float, default=7.0, help="minimal distance between vertices (voxels)")
+    ap.add_argument("--force", type=float, default=45.0, help="magnitude of the total load")
+    args = ap.parse_args()
+    rng = random.Random(args.seed)
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    kinds = ["cantilever", "bridge", "random"]
+    for k in range(1, args.count + 1):
+        case = make_case(rng, k, kinds[(k - 1) % len(kinds)], *args.resolution, args.min_dist, args.force)
+        path = out / f"{case['name']}.json"
+        path.write_text(json.dumps(case, indent=2) + "\n")
+        print(f"wrote {path}: {len(case['skeleton']['vertices'])} vertices, {len(case['skeleton']['edges'])} edges")
+
+
+if __name__ == "__main__":
+    main()

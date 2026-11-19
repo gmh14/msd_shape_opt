@@ -1,0 +1,16 @@
+[16:16:49] running case 0 method 0
+[16:22:40] done (exit 0)
+[16:22:40] running case 1 method 0
+[16:28:30] done (exit 0)
+[16:28:30] running case 5 method 0
+[16:34:09] done (exit 0)
+[16:34:09] running case 3 method 0
+[16:40:07] done (exit 0)
+[16:40:07] running case 0 method 1
+[16:46:09] done (exit 0)
+[16:46:09] running case 1 method 1
+[16:52:34] done (exit 0)
+[16:52:34] running case 5 method 1
+[16:53:31] done (exit 0)
+[16:53:31] running case 3 method 1
+[16:59:32] done (exit 0)

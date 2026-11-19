@@ -1,0 +1,222 @@
+--- a/external/vegafem/mesh/edgeKey.h
++++ b/external/vegafem/mesh/edgeKey.h
+@@ -36,6 +36,7 @@
+ #include <ostream>
+ #include <functional>
+ #include <utility>
++#include <cstdint>
+ 
+ // unoriented edge
+ struct UEdgeKey
+--- a/external/vegafem/mesh/predicates.cpp
++++ b/external/vegafem/mesh/predicates.cpp
+@@ -210,12 +210,12 @@
+   const auto ret = CGAL::intersection(seg, tri);
+   if (ret) {
+     K::Point_3 pt;
+-    if (const K::Segment_3 *s = boost::get<K::Segment_3>(&*ret)) {
++    if (const K::Segment_3 *s = std::get_if<K::Segment_3>(&*ret)) {
+       std::cout << "Segment is exactly on triangle. pick v0" << std::endl;
+       pt = s->vertex(0);
+     }
+     else {
+-      const K::Point_3 *p = boost::get<K::Point_3>(&*ret);
++      const K::Point_3 *p = std::get_if<K::Point_3>(&*ret);
+       pt = *p;
+     }
+ 
+@@ -359,12 +359,12 @@
+   const auto ret = CGAL::intersection(seg1, seg2);
+   if (ret) {
+     K::Point_2 pt;
+-    if (const K::Segment_2 *s = boost::get<K::Segment_2>(&*ret)) {
++    if (const K::Segment_2 *s = std::get_if<K::Segment_2>(&*ret)) {
+       std::cout << "Segment is exactly on Segment. pick v0" << std::endl;
+       pt = s->vertex(0);
+     }
+     else {
+-      const K::Point_2 *p = boost::get<K::Point_2>(&*ret);
++      const K::Point_2 *p = std::get_if<K::Point_2>(&*ret);
+       pt = *p;
+     }
+ 
+--- a/src/libraries/opt/gradientOptimizer.cpp
++++ b/src/libraries/opt/gradientOptimizer.cpp
+@@ -227,7 +227,8 @@
+   }
+ 
+   ES::TransferBigToSmall(K, K11, Kmap, 1);
+-  Eigen::saveMarket(K11, "K11.mat");
++  // [msd_shape_opt] disabled debug dump: it wrote the whole stiffness matrix (~100 MB of text) at every solve
++  // Eigen::saveMarket(K11, "K11.mat");
+ 
+   solver.factorize(K11);
+   ES::VXd u1 = solver.solve(fext1);
+@@ -291,7 +292,8 @@
+ void MedialAxisRepresentation::optimizeContinuous(
+   const std::vector<VegaFEM::EigenSupport::V3d> &gridVertices, const std::vector<std::array<int, 8>> voxels,
+   const std::vector<VegaFEM::EigenSupport::V3d> &vertices, const std::vector<std::array<int, 2>> &edges,
+-  const VegaFEM::EigenSupport::VXd &fextIn, const std::vector<int> &fixedVertices, double v0, int method)
++  const VegaFEM::EigenSupport::VXd &fextIn, const std::vector<int> &fixedVertices, double v0, int method,
++  const OptimizeContinuousOptions &options)
+ {
+   // argmin E(u1, theta) = 1/2 u1T K11 u1 + 1/2 w (S theta - v0)^2
+   // st. K11 u1 = f1
+@@ -304,7 +306,7 @@
+   //           = -u1T dK11/dtheta u1 + 1/2 u1T dK11/dtheta u1 + w (S theta - v0)^T S
+   //           = -1/2 u1T dK11/dtheta u1  + w (S theta - v0)^T S
+ 
+-  double defaultR = 0.04;
++  double defaultR = options.initialRadius;  // [msd_shape_opt] originally hard-coded to 0.04 (= the default option)
+   double cellSize = (gridVertices[voxels[0][0]] - gridVertices[voxels[0][1]]).norm();
+   double totalCount = (double)voxels.size();
+   double w = cellSize * cellSize * cellSize * 10;
+@@ -562,8 +564,33 @@
+ 
+   std::ofstream oEnergyFile("energy.txt");
+ 
++  // [msd_shape_opt] (additive) bookkeeping used only to report the progress to the caller
++  double lastCompliance = 0, lastVolumePenalty = 0, lastVolumeFraction = 0;
++  double lastGradNorm = 0, lastAlpha = 0, lastMaxChange = 0;
++  int lastLineSearchIters = 0;
++  auto reportIteration = [&](int iter) {
++    if (!options.iterationCallback)
++      return;
++
++    OptimizeContinuousIterationInfo info;
++    info.iteration = iter;
++    info.theta = &theta;
++    info.reducedTheta = &reducedTheta;
++    info.numSphereTemplateVertices = templateSphere.numVertices();
++    info.numCylinderTemplateVertices = templateCylinder.numVertices();
++    info.compliance = lastCompliance;
++    info.volumePenalty = lastVolumePenalty;
++    info.volumeFraction = lastVolumeFraction;
++    info.energy = lastCompliance + lastVolumePenalty;
++    info.gradientNorm = lastGradNorm;
++    info.stepSize = lastAlpha;
++    info.maxChange = lastMaxChange;
++    info.lineSearchIterations = lastLineSearchIters;
++    options.iterationCallback(info);
++  };
++
+   // opt
+-  for (int giter = 0; giter < 200; giter++) {
++  for (int giter = 0; giter < options.maxIterations; giter++) {  // [msd_shape_opt] originally: giter < 200
+     std::cout << "Iter: " << giter << std::endl;
+     // compute gradient
+     ES::VXd dEdtheta(nele);
+@@ -611,11 +638,14 @@
+ 
+       oEnergyFile << fillCount / totalCount << ',' << term1 << ',' << term2 << ',' << (term1 + term2) << std::endl;
+ 
++      lastCompliance = term1, lastVolumePenalty = term2, lastVolumeFraction = fillCount / totalCount;  // [msd_shape_opt]
++
+       return term1 + term2;
+     };
+ 
+     if (giter == 0) {
+       computeE(1);
++      reportIteration(0);  // [msd_shape_opt]
+     }
+ 
+     if (0) {
+@@ -677,6 +707,7 @@
+       ES::VXd dE_dr_clean = assembleM.transpose() * dE_dr;
+       ES::VXd dE_dq = assembleM1.transpose() * dE_dr_clean;
+       std::cout << "||grad||=" << dE_dq.norm() << "; ||grad||_max=" << dE_dq.cwiseAbs().maxCoeff() << std::endl;
++      lastGradNorm = dE_dq.norm();  // [msd_shape_opt]
+ 
+       double E0 = computeE();
+       ES::VXd rInitialClean = assembleM.transpose() * reducedTheta;
+@@ -731,6 +762,7 @@
+       std::cout << "max alpha: " << alpha << std::endl;
+ 
+       for (int liter = 0; liter < 15; liter++) {
++        lastLineSearchIters = liter + 1;  // [msd_shape_opt]
+         ES::VXd qClean = qInitialClean - alpha * dE_dq;
+         ES::VXd rClean = assembleM1 * qClean;
+         reducedTheta = assembleM * rClean;
+@@ -766,6 +798,9 @@
+       double maxChange = alpha * dE_dr.cwiseAbs().maxCoeff();
+       std::cout << "max change: " << maxChange << std::endl;
+ 
++      lastAlpha = alpha, lastMaxChange = maxChange;  // [msd_shape_opt]
++      reportIteration(giter + 1);                    // [msd_shape_opt]
++
+       if (maxChange < 1e-5) {
+         break;
+       }
+@@ -773,6 +808,7 @@
+     else {
+       ES::VXd dE_dr_clean = assembleM.transpose() * dE_dr;
+       std::cout << "r ||grad||=" << dE_dr_clean.norm() << "; ||grad||_max=" << dE_dr_clean.cwiseAbs().maxCoeff() << std::endl;
++      lastGradNorm = dE_dr_clean.norm();  // [msd_shape_opt]
+ 
+       // std::vector<std::pair<double, int>> entryLists;
+       // for (int vi = 0; vi < dE_dr_clean.size(); vi++) {
+@@ -892,6 +928,7 @@
+       std::cout << "max alpha: " << alpha << std::endl;
+ 
+       for (int liter = 0; liter < 15; liter++) {
++        lastLineSearchIters = liter + 1;  // [msd_shape_opt]
+         ES::VXd rClean = rInitialClean - alpha * dE_dr_clean;
+         reducedTheta = assembleM * rClean;
+         //  ES::VXd reducedTheta0 = reducedTheta;
+@@ -951,6 +988,9 @@
+       double maxChange = alpha * dE_dr.cwiseAbs().maxCoeff();
+       std::cout << "max change: " << maxChange << std::endl;
+ 
++      lastAlpha = alpha, lastMaxChange = maxChange;  // [msd_shape_opt]
++      reportIteration(giter + 1);                    // [msd_shape_opt]
++
+       if (maxChange < 1e-5) {
+         break;
+       }
+--- a/src/libraries/opt/gradientOptimizer.h
++++ b/src/libraries/opt/gradientOptimizer.h
+@@ -4,12 +4,42 @@
+ 
+ #include <vector>
+ #include <array>
++#include <functional>
+ 
+ namespace MedialAxisRepresentation
+ {
++// [msd_shape_opt] (additive) state of the optimization reported after the initial evaluation
++// (iteration = 0) and after every accepted gradient-descent step (iteration = 1, 2, ...).
++struct OptimizeContinuousIterationInfo
++{
++  int iteration = 0;
++  const VegaFEM::EigenSupport::VXd *theta = nullptr;         // per-voxel density in [theta_min, 1]
++  const VegaFEM::EigenSupport::VXd *reducedTheta = nullptr;  // all primitive parameters (see rfunc.h for the layout)
++  int numSphereTemplateVertices = 0;                         // #vertices of the template sphere (s.obj)
++  int numCylinderTemplateVertices = 0;                       // #vertices of the template cylinder (c1.obj)
++  double compliance = 0;                                     // 1/2 u^T K u
++  double volumePenalty = 0;                                  // w/2 max(V - V0, 0)^2
++  double volumeFraction = 0;                                 // fraction of filled voxels
++  double energy = 0;                                         // compliance + volumePenalty
++  double gradientNorm = 0;                                   // norm of the (reduced) gradient used for the step
++  double stepSize = 0;                                       // accepted line-search step
++  double maxChange = 0;                                      // convergence measure of the original code
++  int lineSearchIterations = 0;
++};
++
++// [msd_shape_opt] (additive) options; the default values are exactly the values that were
++// hard-coded in the original implementation.
++struct OptimizeContinuousOptions
++{
++  int maxIterations = 200;
++  double initialRadius = 0.04;
++  std::function<void(const OptimizeContinuousIterationInfo &)> iterationCallback;
++};
++
+ void optimizeContinuous(
+   const std::vector<VegaFEM::EigenSupport::V3d> &gridVertices, const std::vector<std::array<int, 8>> voxels,
+   const std::vector<VegaFEM::EigenSupport::V3d> &spheres, const std::vector<std::array<int, 2>> &edges,
+-  const VegaFEM::EigenSupport::VXd &fextIn, const std::vector<int> &fixedVertices, double v0, int method = 0);
++  const VegaFEM::EigenSupport::VXd &fextIn, const std::vector<int> &fixedVertices, double v0, int method = 0,
++  const OptimizeContinuousOptions &options = OptimizeContinuousOptions());
+ 
+ }
+\ No newline at end of file
